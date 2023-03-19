@@ -22,5 +22,5 @@ jobs:
         password: ${{ secrets.GH_TOKEN }}
     - name: Build image and push  
       run: |
-            docker build . --file Dockerfile --tag latest
+            docker build . --file Dockerfile --tag ghcr.io/benitoite/rawtherapee_docker-image:latest
             docker push ghcr.io/benitoite/rawtherapee_docker-image:latest
