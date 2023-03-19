@@ -20,7 +20,7 @@ RUN cd ~/programs && lensfun-update-data
 
 #   configure build system and compile
 
-RUN cd ~/programs/code-rawtherapee && mkdir build && cd build && cmake     -DCMAKE_BUILD_TYPE="release"     -DCACHE_NAME_SUFFIX=""    -DPROC_TARGET_NUMBER="1"     -DBUILD_BUNDLE="ON"     -DBUNDLE_BASE_INSTALL_DIR="$HOME/programs/rawtherapee"     -DOPTION_OMP="ON"     -DWITH_LTO="ON"    -DWITH_PROF="OFF"     -DWITH_SAN="OFF"     -DWITH_SYSTEM_KLT="OFF"  ..
+RUN cd ~/programs/code-rawtherapee && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE="release" -DCACHE_NAME_SUFFIX="" -DPROC_TARGET_NUMBER="1" -DBUILD_BUNDLE="ON" -DBUNDLE_BASE_INSTALL_DIR="$HOME/programs/rawtherapee" -DOPTION_OMP="ON" -DWITH_LTO="ON" -DWITH_PROF="OFF" -DWITH_SAN="OFF" -DWITH_SYSTEM_KLT="OFF" ..
 RUN cd ~/programs/code-rawtherapee/build && make -j$(nproc --all) && make install
 
 #   set the entrypoint command
