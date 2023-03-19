@@ -20,6 +20,6 @@ jobs:
       registry: ghcr.io
       username: ${{ github.actor }}
       password: ${{ secrets.GH_TOKEN }}
-      run: |
-             docker build . --file Dockerfile --tag rawtherapee_docker-image
-             docker push ghcr.io/benitoite/rawtherapee_docker-image:latest
+run: |
+      docker build . --file Dockerfile --tag rawtherapee_docker-image
+      docker push ghcr.io/benitoite/rawtherapee_docker-image:latest
