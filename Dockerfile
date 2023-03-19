@@ -26,4 +26,4 @@ RUN cd ~/programs/code-rawtherapee/build && make -j$(nproc --all) && make instal
 #   set the entrypoint command
 
 LABEL maintainer="kd6kxr@gmail.com"
-CMD echo "This is a test..." && ~/programs/rawtherapee/rawtherapee && echo "THATS ALL FOLKS!!!"
+CMD echo "This is a test..." && ~/programs/rawtherapee/rawtherapee && echo "...end of test."
