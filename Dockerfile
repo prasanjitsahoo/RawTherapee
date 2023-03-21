@@ -26,4 +26,4 @@ RUN cd ~/programs/code-rawtherapee/build && make -j$(nproc --all) && make instal
 #   set the entrypoint command
 
 LABEL maintainer="kd6kxr@gmail.com"
-CMD echo "This is a test..." && GDK_SCALE=2 ~/programs/rawtherapee/rawtherapee && echo "...end of test."
+CMD echo "This is a test..." && GDK_SCALE=.5 ~/programs/rawtherapee/rawtherapee && echo "...end of test."
