@@ -45,6 +45,9 @@ const std::vector<ToolTree> EXPOSURE_PANEL_TOOLS = {
         .id = Tool::SHADOWS_HIGHLIGHTS,
     },
     {
+        .id = Tool::TONE_EQUALIZER,
+    },
+    {
         .id = Tool::EPD,
     },
     {
@@ -286,6 +289,7 @@ ToolPanelCoordinator::ToolPanelCoordinator (bool batch) : ipc (nullptr), favorit
     coarse              = Gtk::manage (new CoarsePanel ());
     toneCurve           = Gtk::manage (new ToneCurve ());
     shadowshighlights   = Gtk::manage (new ShadowsHighlights ());
+    toneEqualizer       = Gtk::manage (new ToneEqualizer ());
     impulsedenoise      = Gtk::manage (new ImpulseDenoise ());
     defringe            = Gtk::manage (new Defringe ());
     spot                = Gtk::manage (new Spot ());
@@ -561,6 +565,8 @@ std::string ToolPanelCoordinator::getToolName(Tool tool)
             return ToneCurve::TOOL_NAME;
         case Tool::SHADOWS_HIGHLIGHTS:
             return ShadowsHighlights::TOOL_NAME;
+        case Tool::TONE_EQUALIZER:
+            return ToneEqualizer::TOOL_NAME;
         case Tool::IMPULSE_DENOISE:
             return ImpulseDenoise::TOOL_NAME;
         case Tool::DEFRINGE_TOOL:
@@ -850,10 +856,15 @@ ToolPanelCoordinator::updateToolPanel(
         }
         FoldableToolPanel *tool_panel =
             getFoldableToolPanel(*new_tool_trees_iter);
-        if (tool_panel->getParent()) {
+        const bool reparent = tool_panel->getParent();
+        if (reparent) {
             tool_panel->getParent()->remove(*tool_panel->getExpander());
         }
         addPanel(panelBox, tool_panel, level);
+        if (!reparent) {
+            // If attaching for the first time, update the widget sizes.
+            tool_panel->getExpander()->check_resize();
+        }
     }
 
     // Update the child tools.
@@ -1175,8 +1186,8 @@ void ToolPanelCoordinator::profileChange(
 
     // Reset IPTC values when switching procparams from the History
     if (event == rtengine::EvHistoryBrowsed) {
-        mergedParams->iptc.clear();
-        mergedParams->exif.clear();
+        mergedParams->metadata.iptc.clear();
+        mergedParams->metadata.exif.clear();
     }
 
     // And apply the partial profile nparams to mergedParams
@@ -1900,6 +1911,12 @@ bool ToolPanelCoordinator::getFilmNegativeSpot(rtengine::Coord spot, int spotSiz
     return ipc && ipc->getFilmNegativeSpot(spot.x, spot.y, spotSize, refInput, refOutput);
 }
 
+
+void ToolPanelCoordinator::setProgressListener(rtengine::ProgressListener *pl)
+{
+    metadata->setProgressListener(pl);
+}
+
 FoldableToolPanel *ToolPanelCoordinator::getFoldableToolPanel(Tool tool) const
 {
     switch (tool) {
@@ -1907,6 +1924,8 @@ FoldableToolPanel *ToolPanelCoordinator::getFoldableToolPanel(Tool tool) const
             return toneCurve;
         case Tool::SHADOWS_HIGHLIGHTS:
             return shadowshighlights;
+        case Tool::TONE_EQUALIZER:
+            return toneEqualizer;
         case Tool::IMPULSE_DENOISE:
             return impulsedenoise;
         case Tool::DEFRINGE_TOOL:

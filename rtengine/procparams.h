@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -642,15 +643,11 @@ struct WBParams {
     double           equal;
     double           tempBias;
     StandardObserver observer;
-    int              itcwb_thres;
-    int              itcwb_precis;
-    int              itcwb_size;
-    int              itcwb_delta;
-    int              itcwb_fgreen;
+    double           itcwb_green;
     int              itcwb_rgreen;
     bool             itcwb_nopurple;
-    bool             itcwb_sorted;
-    bool             itcwb_forceextra;
+    bool             itcwb_alg;
+    Glib::ustring    itcwb_prim;
     bool             itcwb_sampling;
 
     WBParams();
@@ -775,6 +772,7 @@ struct DirPyrDenoiseParams {
     double  chroma;
     double  redchro;
     double  bluechro;
+    bool autoGain;
     double  gamma;
     Glib::ustring dmethod;
     Glib::ustring Lmethod;
@@ -838,6 +836,22 @@ struct SHParams {
 
     bool operator ==(const SHParams& other) const;
     bool operator !=(const SHParams& other) const;
+};
+
+/**
+ * Tone equalizer parameters.
+ */
+struct ToneEqualizerParams {
+    bool enabled;
+    std::array<int, 5> bands;
+    int regularization;
+    bool show_colormap;
+    double pivot;
+
+    ToneEqualizerParams();
+
+    bool operator ==(const ToneEqualizerParams &other) const;
+    bool operator !=(const ToneEqualizerParams &other) const;
 };
 
 /**
@@ -1210,6 +1224,7 @@ struct LocallabParams {
         double slomaskSH;
         double lapmaskSH;
         int detailSH;
+        double tePivot;
         double reparsh;
         std::vector<double> LmaskSHcurve;
         double fatamountSH;
@@ -1389,6 +1404,7 @@ struct LocallabParams {
         bool equilret;
         bool loglin;
         double dehazeSaturation;
+        double dehazeblack;
         double softradiusret;
         std::vector<double> CCmaskreticurve;
         std::vector<double> LLmaskreticurve;
@@ -1922,6 +1938,7 @@ struct ColorManagementParams {
         ACES_P1,
         WIDE_GAMUT,
         ACES_P0,
+        JDC_MAX,
         BRUCE_RGB,
         BETA_RGB,
         BEST_RGB,
@@ -1975,30 +1992,21 @@ struct ColorManagementParams {
 };
 
 /**
-  * Parameters for metadata handling
-  */
-struct MetaDataParams {
-    enum Mode {
-        TUNNEL,
-        EDIT,
-        STRIP
-    };
-    Mode mode;
-
-    MetaDataParams();
-
-    bool operator ==(const MetaDataParams &other) const;
-    bool operator !=(const MetaDataParams &other) const;
-};
-
-
-/**
   * Minimal wrapper allowing forward declaration for representing a key/value for the exif metadata information
   */
 class ExifPairs final
 {
+private:
+    using Pairs = std::map<Glib::ustring, Glib::ustring>;
+
 public:
-    using const_iterator = std::map<Glib::ustring, Glib::ustring>::const_iterator;
+    using const_iterator = Pairs::const_iterator;
+    using size_type = Pairs::size_type;
+
+    const_iterator find(const Glib::ustring& key) const
+    {
+        return pairs.find(key);
+    }
 
     const_iterator begin() const
     {
@@ -2015,6 +2023,16 @@ public:
         pairs.clear();
     }
 
+    size_type erase(const Glib::ustring& key)
+    {
+        return pairs.erase(key);
+    }
+
+    bool empty() const
+    {
+        return pairs.empty();
+    }
+
     Glib::ustring& operator[](const Glib::ustring& key)
     {
         return pairs[key];
@@ -2026,7 +2044,7 @@ public:
     }
 
 private:
-    std::map<Glib::ustring, Glib::ustring> pairs;
+    Pairs pairs;
 };
 
 /**
@@ -2058,6 +2076,11 @@ public:
         return pairs.empty();
     }
 
+    iterator erase(const const_iterator& key)
+    {
+        return pairs.erase(key);
+    }
+
     void clear()
     {
         pairs.clear();
@@ -2076,6 +2099,29 @@ public:
 private:
     std::map<Glib::ustring, std::vector<Glib::ustring>> pairs;
 };
+
+/**
+  * Parameters for metadata handling
+  */
+struct MetaDataParams {
+    enum Mode {
+        TUNNEL,
+        EDIT,
+        STRIP
+    };
+    Mode mode;
+    std::vector<std::string> exifKeys;
+    ExifPairs exif;
+    IPTCPairs iptc;
+
+    MetaDataParams();
+
+    bool operator ==(const MetaDataParams &other) const;
+    bool operator !=(const MetaDataParams &other) const;
+
+    static std::vector<std::string> basicExifKeys;
+};
+
 
 struct WaveletParams {
     std::vector<double> ccwcurve;
@@ -2562,6 +2608,7 @@ public:
     EPDParams               epd;             ///< Edge Preserving Decomposition parameters
     FattalToneMappingParams fattal;          ///< Fattal02 tone mapping
     SHParams                sh;              ///< Shadow/highlight enhancement parameters
+    ToneEqualizerParams     toneEqualizer;   ///< Tone equalizer parameters
     CropParams              crop;            ///< Crop parameters
     CoarseTransformParams   coarse;          ///< Coarse transformation (90, 180, 270 deg rotation, h/v flipping) parameters
     CommonTransformParams   commonTrans;     ///< Common transformation parameters (autofill)
@@ -2594,8 +2641,8 @@ public:
     int                     ppVersion;       ///< Version of the PP file from which the parameters have been read
 
     MetaDataParams          metadata;        ///< Metadata parameters
-    ExifPairs               exif;            ///< List of modifications appplied on the exif tags of the input image
-    IPTCPairs               iptc;            ///< The IPTC tags and values to be saved to the output image
+    // ExifPairs               exif;            ///< List of modifications appplied on the exif tags of the input image
+    // IPTCPairs               iptc;            ///< The IPTC tags and values to be saved to the output image
 
     /**
       * The constructor only sets the hand-wired defaults.
