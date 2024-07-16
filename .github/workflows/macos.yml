@@ -166,7 +166,7 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DOSX_CONTINUOUS=ON \
             -DCODESIGNID:STRING="-" \
-            -OSX_UNIVERSAL_URL="file://${ARTIFACT_PATH}" \
+            -DOSX_UNIVERSAL_URL="file://${ARTIFACT_PATH}" \
             ..
             zsh -c 'echo "Configured in $(printf "%0.2f" $(($[$(date +%s)-$(cat configstamp)]/$((60.))))) minutes"'
       - name: Compile RawTherapee
