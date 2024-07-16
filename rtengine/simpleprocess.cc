@@ -231,7 +231,8 @@ private:
         bool autoContrast = imgsrc->getSensorType() == ST_BAYER ? params.raw.bayersensor.dualDemosaicAutoContrast : params.raw.xtranssensor.dualDemosaicAutoContrast;
         double contrastThreshold = imgsrc->getSensorType() == ST_BAYER ? params.raw.bayersensor.dualDemosaicContrast : params.raw.xtranssensor.dualDemosaicContrast;
 
-        imgsrc->demosaic (params.raw, autoContrast, contrastThreshold, params.pdsharpening.enabled && pl);
+        imgsrc->demosaic(params.raw, autoContrast, contrastThreshold, params.pdsharpening.enabled && pl);
+
         if (params.pdsharpening.enabled) {
             imgsrc->captureSharpening(params.pdsharpening, false, params.pdsharpening.contrast, params.pdsharpening.deconvradius);
         }
@@ -272,10 +273,11 @@ private:
         // set the color temperature
         currWB = ColorTemp(params.wb.temperature, params.wb.green, params.wb.equal, params.wb.method, params.wb.observer);
         ColorTemp currWBitc;
+
         if (params.wb.method == "autitcgreen"  && flush) {
             imgsrc->getrgbloc(0, 0, fh, fw, 0, 0, fh, fw, params.wb);
         }
-        const bool autowb = params.wb.method == "autitcgreen";
+        const bool autowb = (params.wb.method == "autitcgreen" && imgsrc->isRAW() && flush);
         ColorTemp autoWB;
         int dread = 0;
         int bia = 1;
@@ -287,7 +289,6 @@ private:
         int kmin  = 20;
         float minhist = 1000000000.f;
         float maxhist = -1000.f;
-        double tempitc = 5000.f;
         double greenitc = 1.;
         float temp0 = 5000.f;
         bool extra = false;
@@ -295,236 +296,64 @@ private:
 
         if (!params.wb.enabled) {
             currWB = ColorTemp();
-        } else if (params.wb.method == "Camera") {
+        } else if (params.wb.method == "Camera" || (params.wb.method == "autitcgreen" && params.wb.compat_version >= 2 && !imgsrc->isRAW() && flush)) {//Use also Camera settings for Temperature correlation and TIF/Jpg
             currWB = imgsrc->getWB();
         } else if (params.wb.method == "autold") {//for Auto RGB
             double rm, gm, bm;
-            imgsrc->getAutoWBMultipliers(rm, gm, bm);
+            if (params.wb.compat_version == 1 && !imgsrc->isRAW()) {
+                // RGB grey compatibility version 1 used the identity
+                // multipliers plus temperature bias for non-raw files.
+                rm = gm = bm = 1.;
+            } else {
+                imgsrc->getAutoWBMultipliers(rm, gm, bm);
+            }
             currWB.update(rm, gm, bm, params.wb.equal, params.wb.observer, params.wb.tempBias);
 
-        } else if (autowb  && flush) {//for auto Itcwb - flush to enable only when batch
+        } else if (autowb) {//for auto Itcwb - flush to enable only when batch only with Raw files
         //code similar to that present in improccoordinator.cc
-                float tem = 5000.f;
-                float gre  = 1.f;
-                double tempref0bias = 5000.;
-                tempitc = 5000.f;
-                bool autowb1 = true;
-                double green_thres = 0.8;
-
-                {
-                    currWBitc = imgsrc->getWB();
-
-                    double greenref = currWBitc.getGreen();
-                    double tempref0bias0 = currWBitc.getTemp();
-
-                    if (greenref > green_thres && params.wb.itcwb_prim == "srgb") {
-                        forcewbgrey = true;
-                    }
-
-                    if (!forcewbgrey && (tempref0bias0 < 3300.f)  && (greenref < 1.13f && greenref > 0.88f)) { //seems good with temp and green...To fixe...limits 1.13 and 0.88
-                        if (settings->verbose) {
-                            printf("Keep camera settings temp=%f green=%f\n", tempref0bias0, greenref);
-                        }
-
-                        autowb1 = true;
-                        kcam = 1;
-                    }
-
-                    if (autowb1) {
-                        //alternative to camera if camera settings out, using autowb grey to find new ref, then mixed with camera
-                        // kcam = 0;
-                        params.wb.method = "autold";
-                        double rm, gm, bm;
-                        tempitc = 5000.f;
-                        greenitc = 1.;
-                        currWBitc = imgsrc->getWB();
-                        tempref0bias = currWBitc.getTemp();
-                        double greenref = currWBitc.getGreen();
-                        bool pargref = true;
-                        bool pargre = true;
-
-                        if ((greenref > 1.5f || tempref0bias < 3300.f || tempref0bias > 7700.f || forcewbgrey) && kcam != 1 && !params.wb.itcwb_sampling) { //probably camera out to adjust...
-                            imgsrc->getAutoWBMultipliersitc(extra, tempref0bias, greenref, tempitc, greenitc, temp0, delta, bia, dread, kcam, nocam, studgood, minchrom, kmin, minhist, maxhist, 0, 0, fh, fw, 0, 0, fh, fw, rm, gm, bm,  params.wb, params.icm, params.raw, params.toneCurve);
-                            imgsrc->wbMul2Camera(rm, gm, bm);
-                            imgsrc->wbCamera2Mul(rm, gm, bm);
-                            ColorTemp ct(rm, gm, bm, 1.0, currWB.getObserver());
-                            tem = ct.getTemp();
-                            gre  = ct.getGreen();
-
-                            if (gre > 1.3f) {
-                                pargre = false;
-                            }
-
-                            if (greenref > 1.3f) {
-                                pargref = false;
-                            }
-
-                            double deltemp = tem - tempref0bias;
-
-                            if (gre > 1.5f && !forcewbgrey) { //probable wrong value
-                                tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value
-                                gre = 0.5f + 0.5f * LIM(gre, 0.9f, 1.1f);//empirical formula in case  system out
-                            } else {
-                                if (!forcewbgrey) {
-                                    gre = 0.2f + 0.8f * LIM(gre, 0.85f, 1.15f);
-                                    tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value
-                                    nocam = 0;
-                                } else {//set temp and green to init itcwb algorithm
-                                    double grepro = LIM(greenref, green_thres, 1.15);
-                                    gre = 0.5f * grepro + 0.5f * LIM(gre, 0.9f, 1.1f);//empirical green between green camera and autowb grey
-
-                                    if (abs(deltemp) < 400.) { //arbitraries thresholds to refine
-                                        tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value between camera and auto grey
-
-                                        if (deltemp > 0.) {
-                                            nocam = 1;
-                                        } else {
-                                            nocam = 2;
-                                        }
-                                    } else if (abs(deltemp) < 900.) { //other arbitrary threshold
-                                        tem = 0.4 * tem + 0.6 * tempref0bias;//find a mixed value between camera and auto grey
-
-                                        if (deltemp > 0.) {
-                                            nocam = 3;
-                                        } else {
-                                            nocam = 4;
-                                        }
-                                    } else if (abs(deltemp) < 1500. && tempref0bias < 4500.f) {
-                                        if ((pargre && pargref) || (!pargre && !pargref)) {
-                                            tem = 0.45 * tem + 0.55 * tempref0bias;//find a mixed value between camera and auto grey
-                                        }
-
-                                        if (pargre && !pargref) {
-                                            tem = 0.7 * tem + 0.3 * tempref0bias;//find a mixed value between camera and auto grey
-                                        }
-
-                                        if (!pargre && pargref) {
-                                            tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value between camera and auto grey
-                                        }
-
-                                        nocam = 5;
-                                    } else if (abs(deltemp) < 1500. && tempref0bias >= 4500.f) {
-                                        if ((pargre && pargref) || (!pargre && !pargref)) {
-                                            tem = 0.45 * tem + 0.55 * tempref0bias;//find a mixed value between camera and auto grey
-                                        }
-
-                                        if (pargre && !pargref) {
-                                            tem = 0.7 * tem + 0.3 * tempref0bias;//find a mixed value between camera and auto grey
-                                        }
-
-                                        if (!pargre && pargref) {
-                                            tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value between camera and auto grey
-                                        }
-
-                                        nocam = 6;
-                                    } else if (abs(deltemp) >= 1500. && tempref0bias < 5500.f) {
-                                        if (tem >= 4500.f) {
-                                            if ((pargre && pargref) || (!pargre && !pargref)) {
-                                                tem = 0.7 * tem + 0.3 * tempref0bias;//find a mixed value between camera and auto grey
-                                            }
-
-                                            if (pargre && !pargref) {
-                                                tem = 0.8 * tem + 0.2 * tempref0bias;//find a mixed value between camera and auto grey
-                                            }
-
-                                            if (!pargre && pargref) {
-                                                tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value between camera and auto grey
-                                            }
-
-                                            nocam = 7;
-                                        } else {
-                                            tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value between camera and auto grey
-                                            nocam = 8;
-                                        }
-                                    } else if (abs(deltemp) >= 1500. && tempref0bias >= 5500.f) {
-                                        if (tem >= 10000.f) {
-                                            tem = 0.99 * tem + 0.01 * tempref0bias;//find a mixed value between camera and auto grey
-                                            nocam = 9;
-                                        } else {
-                                            if ((pargre && pargref) || (!pargre && !pargref)) {
-                                                tem = 0.45 * tem + 0.55 * tempref0bias;//find a mixed value between camera and auto grey
-                                            }
-
-                                            if (pargre && !pargref) {
-                                                tem = 0.7 * tem + 0.3 * tempref0bias;//find a mixed value between camera and auto grey
-                                            }
-
-                                            if (!pargre && pargref) {
-                                                tem = 0.3 * tem + 0.7 * tempref0bias;//find a mixed value between camera and auto grey
-                                            }
-
-                                            nocam = 10;
-                                        }
-                                    } else {
-                                        tem = 0.4 * tem + 0.6 * tempref0bias;
-                                        nocam = 11;
-                                    }
-                                }
-                            }
-
-                            tempitc = tem ;
-
-                            extra = true;
-
-                            if (settings->verbose) {
-                                printf("Using new references AWB grey or mixed  Enable Extra - temgrey=%f gregrey=%f tempitc=%f nocam=%i\n", (double) tem, (double) gre, (double) tempitc, nocam);
-                            }
-                        }
-                    }
-
-                    params.wb.method = "autitcgreen";
-
-                }
-
-                float greenitc_low = 1.f;
-                float tempitc_low = 5000.f;
-                {
-                    double rm, gm, bm;
-                    greenitc = 1.;
-                    currWBitc = imgsrc->getWB();
-                    currWBitc = currWBitc.convertObserver(params.wb.observer);//change the temp/green couple with the same multipliers
-
-                    double tempref = currWBitc.getTemp() * (1. + params.wb.tempBias);
-                    double greenref = currWBitc.getGreen();
-                    greenitc = greenref;
-
-                    if ((greenref > 1.5f || tempref0bias < 3300.f || tempref0bias > 7700.f || forcewbgrey) && autowb1 && kcam != 1 && !params.wb.itcwb_sampling) { //probably camera out to adjust = greenref ? tempref0bias ?
-                        tempref = tem * (1. + params.wb.tempBias);
-                        greenref = gre;
-                    } else {
-
-                    }
-
-                    if(params.wb.itcwb_sampling) {
-                        greenitc_low = greenref;
-                        tempitc_low = tempref;
-                    }
-
-                    if (settings->verbose && params.wb.method ==  "autitcgreen") {
-                        printf("tempref=%f greref=%f tempitc=%f greenitc=%f\n", tempref, greenref, tempitc, greenitc);
-                    }
-
-                    imgsrc->getAutoWBMultipliersitc(extra, tempref, greenref, tempitc, greenitc, temp0, delta,  bia, dread, kcam, nocam, studgood, minchrom, kmin, minhist, maxhist, 0, 0, fh, fw, 0, 0, fh, fw, rm, gm, bm,  params.wb, params.icm, params.raw, params.toneCurve);
-
-                    
-                    params.wb.temperature = tempitc;
-                    params.wb.green = greenitc;
-                    
-                    if(params.wb.itcwb_sampling) {
-                        params.wb.temperature = tempitc_low;
-                        params.wb.green = greenitc_low;
-                    }
-
-                    currWB = ColorTemp(params.wb.temperature, params.wb.green, 1., params.wb.method, params.wb.observer);
-                    currWB.getMultipliers(rm, gm, bm);
-                    autoWB.update(rm, gm, bm, params.wb.equal, params.wb.observer, params.wb.tempBias);
-                    
-                }
+                double rm;
+                double gm;
+                double bm;
+                imgsrc->getAutoWBMultipliersItcGreen(
+                    params,
+                    forcewbgrey,
+                    kcam,
+                    greenitc,
+                    extra,
+                    temp0,
+                    delta,
+                    bia,
+                    dread,
+                    nocam,
+                    studgood,
+                    minchrom,
+                    kmin,
+                    minhist,
+                    maxhist,
+                    fh,
+                    fw,
+                    currWB,
+                    0,
+                    0.,
+                    false,
+                    autoWB,
+                    rm,
+                    gm,
+                    bm);
 
                 currWB = autoWB;
+        } else if (params.wb.method == "autitcgreen" && params.wb.compat_version == 1 && !imgsrc->isRAW() && flush) {
+            // ITCWB compatibility version 1 used 5000 K and observer 10 degrees
+            // for non-raw files.
+            currWB = ColorTemp(5000., 1., 1., params.wb.method, StandardObserver::TEN_DEGREES);
+            currWB.convertObserver(params.wb.observer);
+            params.wb.temperature = currWB.getTemp();
+            params.wb.green = currWB.getGreen();
+            params.wb.equal = currWB.getEqual();
         }
+
         //end WB auto
-        
+
         calclum = nullptr ;
         params.dirpyrDenoise.getCurves(noiseLCurve, noiseCCurve);
         autoNR = (float) settings->nrauto;//
@@ -1041,8 +870,8 @@ private:
         }
 
         // Spot Removal
-        if (params.spot.enabled && !params.spot.entries.empty ()) {
-            ipf.removeSpots (baseImg, imgsrc, params.spot.entries, pp, currWB, nullptr, tr);
+        if (params.spot.enabled && !params.spot.entries.empty()) {
+            ipf.removeSpots(baseImg, imgsrc, params.spot.entries, pp, currWB, nullptr, tr);
         }
 
         // at this stage, we can flush the raw data to free up quite an important amount of memory
@@ -1140,7 +969,7 @@ private:
         ipf.firstAnalysis(baseImg, params, hist16);
 
         ipf.dehaze(baseImg, params.dehaze);
-        ipf.ToneMapFattal02(baseImg, params.fattal, 3, 0, nullptr, 0, 0, 0);
+        ipf.ToneMapFattal02(baseImg, params.fattal, 3, 0, nullptr, 0, 0, 0, false);
 
         // perform transform (excepted resizing)
         if (ipf.needsTransform(fw, fh, imgsrc->getRotateDegree(), imgsrc->getMetaData())) {
@@ -1153,7 +982,7 @@ private:
             }
 
             ipf.transform(baseImg, trImg, 0, 0, 0, 0, fw, fh, fw, fh,
-                           imgsrc->getMetaData(), imgsrc->getRotateDegree(), true, true);
+                          imgsrc->getMetaData(), imgsrc->getRotateDegree(), true, true);
 
             if (trImg != baseImg) {
                 delete baseImg;
@@ -1169,14 +998,29 @@ private:
         ImProcFunctions &ipf = * (ipf_p.get());
 
         for (int sp = 0; sp < (int)params.locallab.spots.size(); sp++) {
-			if(params.locallab.spots.at(sp).expsharp  && params.dirpyrequalizer.cbdlMethod == "bef") {
-				if(params.locallab.spots.at(sp).shardamping < 1) {
-					params.locallab.spots.at(sp).shardamping = 1;
-				}
-			}
-		}
+            if (params.locallab.spots.at(sp).expsharp  && params.dirpyrequalizer.cbdlMethod == "bef") {
+                if (params.locallab.spots.at(sp).shardamping < 1) {
+                    params.locallab.spots.at(sp).shardamping = 1;
+                }
+            }
+        }
+                                                                                            //colorappearance.modelmethod == "02"
+        bool execcam = false;
 
-        if (params.dirpyrequalizer.cbdlMethod == "bef" && params.dirpyrequalizer.enabled && !params.colorappearance.enabled) {
+        //execcam => work around for pre-ciecam in LA: about 0.1 second
+        for (int sp = 0; sp < (int)params.locallab.spots.size(); sp++) {
+            if (params.locallab.spots.at(sp).expprecam) {
+                execcam = true;
+            }
+        }
+        if ((params.dirpyrequalizer.cbdlMethod == "bef") && (params.dirpyrequalizer.enabled || execcam) && !params.colorappearance.enabled) {
+            if (execcam  && !params.dirpyrequalizer.enabled) {
+                params.dirpyrequalizer.enabled = true;
+
+                if (params.dirpyrequalizer.mult[0] == 1.) {
+                    params.dirpyrequalizer.mult[0] = 1.01;
+                }
+            }
             const int W = baseImg->getWidth();
             const int H = baseImg->getHeight();
             LabImage labcbdl(W, H);
@@ -1211,6 +1055,7 @@ private:
             LocLLmaskCurve locllmasCurve;
             LocHHmaskCurve lochhmasCurve;
             LocHHmaskCurve lochhhmasCurve;
+            LocHHmaskCurve lochhhmascieCurve;
             LocCCmaskCurve locccmasexpCurve;
             LocLLmaskCurve locllmasexpCurve;
             LocHHmaskCurve lochhmasexpCurve;
@@ -1249,6 +1094,7 @@ private:
 
             LocwavCurve loclmasCurveblwav;
             LocwavCurve loclmasCurvecolwav;
+            LocwavCurve loclmasCurveciewav;
             LocwavCurve loclmasCurve_wav;
             LocwavCurve locwavCurve;
             LocwavCurve locwavCurvejz;
@@ -1288,6 +1134,7 @@ private:
             LUTf czjzlocalcurve(65536, LUT_CLIP_OFF);
 
             array2D<float> shbuffer;
+
             for (size_t sp = 0; sp < params.locallab.spots.size(); sp++) {
                 if (params.locallab.spots.at(sp).inverssha) {
                     shbuffer(fw, fh);
@@ -1310,6 +1157,7 @@ private:
                 const bool llmasutili = locllmasCurve.Set(params.locallab.spots.at(sp).LLmaskcurve);
                 const bool lhmasutili = lochhmasCurve.Set(params.locallab.spots.at(sp).HHmaskcurve);
                 const bool lhhmasutili = lochhhmasCurve.Set(params.locallab.spots.at(sp).HHhmaskcurve);
+                const bool lhhmascieutili = lochhhmascieCurve.Set(params.locallab.spots.at(sp).HHhmaskciecurve);
                 const bool lcmasexputili = locccmasexpCurve.Set(params.locallab.spots.at(sp).CCmaskexpcurve);
                 const bool llmasexputili = locllmasexpCurve.Set(params.locallab.spots.at(sp).LLmaskexpcurve);
                 const bool lhmasexputili = lochhmasexpCurve.Set(params.locallab.spots.at(sp).HHmaskexpcurve);
@@ -1345,6 +1193,7 @@ private:
                 const bool lhhmas_utili = lochhhmas_Curve.Set(params.locallab.spots.at(sp).HHhmask_curve);
                 const bool lmasutiliblwav = loclmasCurveblwav.Set(params.locallab.spots.at(sp).LLmaskblcurvewav);
                 const bool lmasutilicolwav = loclmasCurvecolwav.Set(params.locallab.spots.at(sp).LLmaskcolcurvewav);
+                const bool lmasutiliciewav = loclmasCurveciewav.Set(params.locallab.spots.at(sp).LLmaskciecurvewav);
                 const bool lcmaslcutili = locccmaslcCurve.Set(params.locallab.spots.at(sp).CCmasklccurve);
                 const bool llmaslcutili = locllmaslcCurve.Set(params.locallab.spots.at(sp).LLmasklccurve);
                 const bool lmasutili_wav = loclmasCurve_wav.Set(params.locallab.spots.at(sp).LLmask_curvewav);
@@ -1389,9 +1238,14 @@ private:
                 double shcompr = params.locallab.spots.at(sp).shcompr;
                 double br = params.locallab.spots.at(sp).lightness;
                 double cont = params.locallab.spots.at(sp).contrast;
-                if (lblack < 0. && params.locallab.spots.at(sp).expMethod == "pde" ) {
+
+                if (lblack < 0. && params.locallab.spots.at(sp).expMethod == "pde") {
                     lblack *= 1.5;
                 }
+
+                float contsig = params.locallab.spots.at(sp).contsigqcie;
+
+                float lightsig = params.locallab.spots.at(sp).lightsigqcie;
 
                 // Reference parameters computation
                 double huere, chromare, lumare, huerefblu, chromarefblu, lumarefblu, sobelre;
@@ -1402,12 +1256,18 @@ private:
                 float meanretie;
                 float stdretie;
                 float fab = 1.f;
+                float maxicam = -1000.f;
+                float rdx, rdy, grx, gry, blx, bly = 0.f;
+                float meanx, meany, meanxe, meanye = 0.f;
+                int ill = 2;
+                int prim = 3;
 
                 if (params.locallab.spots.at(sp).spotMethod == "exc") {
                     ipf.calc_ref(sp, reservView.get(), reservView.get(), 0, 0, fw, fh, 1, huerefblu, chromarefblu, lumarefblu, huere, chromare, lumare, sobelre, avge, locwavCurveden, locwavdenutili);
                 } else {
                     ipf.calc_ref(sp, labView, labView, 0, 0, fw, fh, 1, huerefblu, chromarefblu, lumarefblu, huere, chromare, lumare, sobelre, avge, locwavCurveden, locwavdenutili);
                 }
+
                 CurveFactory::complexCurvelocal(ecomp, lblack / 65535., lhlcompr, lhlcomprthresh, shcompr, br, cont, lumare,
                                                 hltonecurveloc, shtonecurveloc, tonecurveloc, lightCurveloc, avge,
                                                 1);
@@ -1421,7 +1281,7 @@ private:
                 float Tmax;
                 float highresi = 0.f;
                 float nresi = 0.f;
-                float highresi46 =0.f;
+                float highresi46 = 0.f;
                 float nresi46 = 0.f;
                 float Lhighresi = 0.f;
                 float Lnresi = 0.f;
@@ -1430,60 +1290,61 @@ private:
 
                 // No Locallab mask is shown in exported picture
                 ipf.Lab_Local(2, sp, shbuffer, labView, labView, reservView.get(), savenormtmView.get(), savenormretiView.get(), lastorigView.get(), fw, fh, 0, 0, fw, fh,  1, locRETgainCurve, locRETtransCurve,
-                        lllocalcurve, locallutili,
-                        cllocalcurve, localclutili,
-                        lclocalcurve, locallcutili,
-                        loclhCurve, lochhCurve, locchCurve,
-                        lochhCurvejz, locchCurvejz,loclhCurvejz,
-                        lmasklocalcurve, localmaskutili,
-                        lmaskexplocalcurve, localmaskexputili,
-                        lmaskSHlocalcurve, localmaskSHutili,
-                        lmaskviblocalcurve, localmaskvibutili,
-                        lmasktmlocalcurve, localmasktmutili,
-                        lmaskretilocalcurve, localmaskretiutili,
-                        lmaskcblocalcurve, localmaskcbutili,
-                        lmaskbllocalcurve, localmaskblutili,
-                        lmasklclocalcurve, localmasklcutili,
-                        lmaskloglocalcurve, localmasklogutili,
-                        lmasklocal_curve, localmask_utili,
-                        lmaskcielocalcurve, localmaskcieutili,
-                        cielocalcurve, localcieutili,
-                        cielocalcurve2, localcieutili2,
-                        jzlocalcurve, localjzutili,
-                        czlocalcurve, localczutili,
-                        czjzlocalcurve, localczjzutili,
+                              lllocalcurve, locallutili,
+                              cllocalcurve, localclutili,
+                              lclocalcurve, locallcutili,
+                              loclhCurve, lochhCurve, locchCurve,
+                              lochhCurvejz, locchCurvejz, loclhCurvejz,
+                              lmasklocalcurve, localmaskutili,
+                              lmaskexplocalcurve, localmaskexputili,
+                              lmaskSHlocalcurve, localmaskSHutili,
+                              lmaskviblocalcurve, localmaskvibutili,
+                              lmasktmlocalcurve, localmasktmutili,
+                              lmaskretilocalcurve, localmaskretiutili,
+                              lmaskcblocalcurve, localmaskcbutili,
+                              lmaskbllocalcurve, localmaskblutili,
+                              lmasklclocalcurve, localmasklcutili,
+                              lmaskloglocalcurve, localmasklogutili,
+                              lmasklocal_curve, localmask_utili,
+                              lmaskcielocalcurve, localmaskcieutili,
+                              cielocalcurve, localcieutili,
+                              cielocalcurve2, localcieutili2,
+                              jzlocalcurve, localjzutili,
+                              czlocalcurve, localczutili,
+                              czjzlocalcurve, localczjzutili,
 
-                        locccmasCurve, lcmasutili, locllmasCurve, llmasutili, lochhmasCurve, lhmasutili, lochhhmasCurve, lhhmasutili, locccmasexpCurve, lcmasexputili, locllmasexpCurve, llmasexputili, lochhmasexpCurve, lhmasexputili,
-                        locccmasSHCurve, lcmasSHutili, locllmasSHCurve, llmasSHutili, lochhmasSHCurve, lhmasSHutili,
-                        locccmasvibCurve, lcmasvibutili, locllmasvibCurve, llmasvibutili, lochhmasvibCurve, lhmasvibutili,
-                        locccmascbCurve, lcmascbutili, locllmascbCurve, llmascbutili, lochhmascbCurve, lhmascbutili,
-                        locccmasretiCurve, lcmasretiutili, locllmasretiCurve, llmasretiutili, lochhmasretiCurve, lhmasretiutili,
-                        locccmastmCurve, lcmastmutili, locllmastmCurve, llmastmutili, lochhmastmCurve, lhmastmutili,
-                        locccmasblCurve, lcmasblutili, locllmasblCurve, llmasblutili, lochhmasblCurve, lhmasblutili,
-                        locccmaslcCurve, lcmaslcutili, locllmaslcCurve, llmaslcutili, lochhmaslcCurve, lhmaslcutili,
-                        locccmaslogCurve, lcmaslogutili, locllmaslogCurve, llmaslogutili, lochhmaslogCurve, lhmaslogutili,
+                              locccmasCurve, lcmasutili, locllmasCurve, llmasutili, lochhmasCurve, lhmasutili, lochhhmasCurve, lhhmasutili, lochhhmascieCurve, lhhmascieutili, locccmasexpCurve, lcmasexputili, locllmasexpCurve, llmasexputili, lochhmasexpCurve, lhmasexputili,
+                              locccmasSHCurve, lcmasSHutili, locllmasSHCurve, llmasSHutili, lochhmasSHCurve, lhmasSHutili,
+                              locccmasvibCurve, lcmasvibutili, locllmasvibCurve, llmasvibutili, lochhmasvibCurve, lhmasvibutili,
+                              locccmascbCurve, lcmascbutili, locllmascbCurve, llmascbutili, lochhmascbCurve, lhmascbutili,
+                              locccmasretiCurve, lcmasretiutili, locllmasretiCurve, llmasretiutili, lochhmasretiCurve, lhmasretiutili,
+                              locccmastmCurve, lcmastmutili, locllmastmCurve, llmastmutili, lochhmastmCurve, lhmastmutili,
+                              locccmasblCurve, lcmasblutili, locllmasblCurve, llmasblutili, lochhmasblCurve, lhmasblutili,
+                              locccmaslcCurve, lcmaslcutili, locllmaslcCurve, llmaslcutili, lochhmaslcCurve, lhmaslcutili,
+                              locccmaslogCurve, lcmaslogutili, locllmaslogCurve, llmaslogutili, lochhmaslogCurve, lhmaslogutili,
 
-                        locccmas_Curve, lcmas_utili, locllmas_Curve, llmas_utili, lochhmas_Curve, lhmas_utili,
-                        locccmascieCurve, lcmascieutili, locllmascieCurve, llmascieutili, lochhmascieCurve, lhmascieutili,
-                        lochhhmas_Curve, lhhmas_utili,
-                        loclmasCurveblwav,lmasutiliblwav,
-                        loclmasCurvecolwav,lmasutilicolwav,
-                        locwavCurve, locwavutili,
-                        locwavCurvejz, locwavutilijz,
-                        loclevwavCurve, loclevwavutili,
-                        locconwavCurve, locconwavutili,
-                        loccompwavCurve, loccompwavutili,
-                        loccomprewavCurve, loccomprewavutili,
-                        locwavCurvehue, locwavhueutili,
-                        locwavCurveden, locwavdenutili,
-                        locedgwavCurve, locedgwavutili,
-                        loclmasCurve_wav,lmasutili_wav,
-                        LHutili, HHutili, CHutili, HHutilijz, CHutilijz, LHutilijz, cclocalcurve, localcutili, rgblocalcurve, localrgbutili, localexutili, exlocalcurve, hltonecurveloc, shtonecurveloc, tonecurveloc, lightCurveloc,
-                        huerefblu, chromarefblu, lumarefblu, huere, chromare, lumare, sobelre, lastsav, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        minCD, maxCD, mini, maxi, Tmean, Tsigma, Tmin, Tmax,
-                        meantme, stdtme, meanretie, stdretie, fab,
-                        highresi, nresi, highresi46, nresi46, Lhighresi, Lnresi, Lhighresi46, Lnresi46
-);
+                              locccmas_Curve, lcmas_utili, locllmas_Curve, llmas_utili, lochhmas_Curve, lhmas_utili,
+                              locccmascieCurve, lcmascieutili, locllmascieCurve, llmascieutili, lochhmascieCurve, lhmascieutili,
+                              lochhhmas_Curve, lhhmas_utili,
+                              loclmasCurveblwav, lmasutiliblwav,
+                              loclmasCurvecolwav, lmasutilicolwav,
+                              loclmasCurveciewav, lmasutiliciewav,
+                              locwavCurve, locwavutili,
+                              locwavCurvejz, locwavutilijz,
+                              loclevwavCurve, loclevwavutili,
+                              locconwavCurve, locconwavutili,
+                              loccompwavCurve, loccompwavutili,
+                              loccomprewavCurve, loccomprewavutili,
+                              locwavCurvehue, locwavhueutili,
+                              locwavCurveden, locwavdenutili,
+                              locedgwavCurve, locedgwavutili,
+                              loclmasCurve_wav, lmasutili_wav,
+                              LHutili, HHutili, CHutili, HHutilijz, CHutilijz, LHutilijz, cclocalcurve, localcutili, rgblocalcurve, localrgbutili, localexutili, exlocalcurve, hltonecurveloc, shtonecurveloc, tonecurveloc, lightCurveloc,
+                              huerefblu, chromarefblu, lumarefblu, huere, chromare, lumare, sobelre, lastsav, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                              minCD, maxCD, mini, maxi, Tmean, Tsigma, Tmin, Tmax,
+                              meantme, stdtme, meanretie, stdretie, fab, maxicam, rdx, rdy, grx, gry, blx, bly, meanx, meany, meanxe, meanye, prim, ill, contsig, lightsig,
+                              highresi, nresi, highresi46, nresi46, Lhighresi, Lnresi, Lhighresi46, Lnresi46
+                             );
 
                 if (sp + 1u < params.locallab.spots.size()) {
                     // do not copy for last spot as it is not needed anymore
@@ -1581,7 +1442,7 @@ private:
         ipf.rgbProc(baseImg, labView, nullptr, curve1, curve2, curve, params.toneCurve.saturation, rCurve, gCurve, bCurve, satLimit, satLimitOpacity, ctColorCurve, ctOpacityCurve, opautili, clToningcurve, cl2Toningcurve, customToneCurve1, customToneCurve2, customToneCurvebw1, customToneCurvebw2, rrm, ggm, bbm, autor, autog, autob, expcomp, hlcompr, hlcomprthresh, dcpProf, as, histToneCurve, options.chunkSizeRGB, options.measure);
 
         if (settings->verbose) {
-            printf ("Output image / Auto B&W coefs:   R=%.2f   G=%.2f   B=%.2f\n", static_cast<double>(autor), static_cast<double>(autog), static_cast<double>(autob));
+            printf("Output image / Auto B&W coefs:   R=%.2f   G=%.2f   B=%.2f\n", static_cast<double>(autor), static_cast<double>(autog), static_cast<double>(autob));
         }
 
         // if clut was used and size of clut cache == 1 we free the memory used by the clutstore (default clut cache size = 1 for 32 bit OS)
@@ -1650,21 +1511,22 @@ private:
 
 
         if (params.colorToning.enabled && params.colorToning.method == "LabGrid") {
-            ipf.colorToningLabGrid(labView, 0,labView->W , 0, labView->H, false);
+            ipf.colorToningLabGrid(labView, 0, labView->W, 0, labView->H, false);
         }
 
-        ipf.shadowsHighlights(labView, params.sh.enabled, params.sh.lab,params.sh.highlights ,params.sh.shadows, params.sh.radius, 1, params.sh.htonalwidth, params.sh.stonalwidth);
+        ipf.shadowsHighlights(labView, params.sh.enabled, params.sh.lab, params.sh.highlights, params.sh.shadows, params.sh.radius, 1, params.sh.htonalwidth, params.sh.stonalwidth);
 
         if (params.localContrast.enabled) {
             // Alberto's local contrast
-                ipf.localContrast(labView, labView->L, params.localContrast, false, 1);//scale);
+            ipf.localContrast(labView, labView->L, params.localContrast, false, 1);//scale);
         }
 
         ipf.chromiLuminanceCurve(nullptr, 1, labView, labView, curve1, curve2, satcurve, lhskcurve, clcurve, lumacurve, utili, autili, butili, ccutili, cclutili, clcutili, dummy, dummy);
 
 
-        if ((params.colorappearance.enabled && !params.colorappearance.tonecie) || (!params.colorappearance.enabled)) {
-            ipf.EPDToneMap (labView, 0, 1);
+    //    if ((params.colorappearance.enabled && !params.colorappearance.tonecie) || (!params.colorappearance.enabled)) {
+        if ((params.colorappearance.enabled && !params.colorappearance.tonecie) || (params.colorappearance.modelmethod != "02")) {
+            ipf.EPDToneMap(labView, 0, 1);
         }
 
 
@@ -1673,8 +1535,9 @@ private:
 
         // for all treatments Defringe, Sharpening, Contrast detail ,Microcontrast they are activated if "CIECAM" function are disabled
 
-        if ((params.colorappearance.enabled && !settings->autocielab) || (!params.colorappearance.enabled)) {
-            ipf.impulsedenoise (labView);
+      //  if ((params.colorappearance.enabled && !settings->autocielab) || (!params.colorappearance.enabled)) {
+        if ((params.colorappearance.enabled && !settings->autocielab) || (params.colorappearance.modelmethod != "02")) {
+            ipf.impulsedenoise(labView);
             ipf.defringe(labView);
         }
 
@@ -1683,12 +1546,14 @@ private:
         }
 
         if (params.sharpenMicro.enabled) {
-            if ((params.colorappearance.enabled && !settings->autocielab) || (!params.colorappearance.enabled)) {
+          //  if ((params.colorappearance.enabled && !settings->autocielab) || (!params.colorappearance.enabled)) {
+            if ((params.colorappearance.enabled && !settings->autocielab) || (params.colorappearance.modelmethod != "02")) {
                 ipf.MLmicrocontrast(labView);     //!params.colorappearance.sharpcie
             }
         }
 
-        if (((params.colorappearance.enabled && !settings->autocielab) || (!params.colorappearance.enabled)) && params.sharpening.enabled) {
+      //  if (((params.colorappearance.enabled && !settings->autocielab) || (!params.colorappearance.enabled)) && params.sharpening.enabled) {
+        if (((params.colorappearance.enabled && !settings->autocielab) || (params.colorappearance.modelmethod != "02")) && params.sharpening.enabled) {
             ipf.sharpening(labView, params.sharpening);
 
         }
@@ -1697,12 +1562,14 @@ private:
 
         // directional pyramid wavelet
         if (params.dirpyrequalizer.cbdlMethod == "aft") {
-            if ((params.colorappearance.enabled && !settings->autocielab)  || !params.colorappearance.enabled) {
+         //   if ((params.colorappearance.enabled && !settings->autocielab)  || !params.colorappearance.enabled) {
+            if ((params.colorappearance.enabled && !settings->autocielab)  || params.colorappearance.modelmethod != "02") {
                 ipf.dirpyrequalizer(labView, 1);     //TODO: this is the luminance tonecurve, not the RGB one
             }
         }
 
-        if ((params.wavelet.enabled)) {
+        int savestr = params.wavelet.strength;//work around for abstract profile: time about = 0.1 second
+        if ((params.wavelet.enabled)  || (params.icm.workingTRC != ColorManagementParams::WorkingTrc::NONE  && params.icm.trcExp)) {
             LabImage *unshar = nullptr;
             WaveletParams WaveParams = params.wavelet;
             WavCurve wavCLVCurve;
@@ -1722,12 +1589,9 @@ private:
             bool proton = WaveParams.exptoning;
             bool pronois = WaveParams.expnoise;
 
-/*
-            if(WaveParams.showmask) {
-                WaveParams.showmask = false;
-                WaveParams.expclari = true;
+            if(params.icm.workingTRC != ColorManagementParams::WorkingTrc::NONE  && params.icm.trcExp) {
+                params.wavelet.strength = 0;
             }
-*/
             if (WaveParams.softrad > 0.f) {
                 provradius = new LabImage(*labView, true);
             }
@@ -1788,6 +1652,7 @@ private:
                             tmpImage->b(ir, jr) = Z;
                             ble[ir][jr] = Y / 32768.f;
                         }
+
                     double epsilmax = 0.0001;
                     double epsilmin = 0.00001;
                     double aepsil = (epsilmax - epsilmin) / 100.f;
@@ -1813,7 +1678,8 @@ private:
                             Color::XYZ2Lab(X, Y, Z, L, a, b);
                             labView->L[ir][jr] = L;
                         }
-                delete tmpImage;
+
+                    delete tmpImage;
                 }
 
             }
@@ -1859,15 +1725,17 @@ private:
 
             wavCLVCurve.Reset();
         }
+        params.wavelet.strength = savestr;
 
         ipf.softLight(labView, params.softlight);
 
 
-        if (params.icm.workingTRC != ColorManagementParams::WorkingTrc::NONE) {
+        if (params.icm.workingTRC != ColorManagementParams::WorkingTrc::NONE  && params.icm.trcExp) {
             const int GW = labView->W;
             const int GH = labView->H;
             std::unique_ptr<LabImage> provis;
             const float pres = 0.01f * params.icm.preser;
+
             if (pres > 0.f && params.icm.wprim != ColorManagementParams::Primaries::DEFAULT) {
                 provis.reset(new LabImage(GW, GH));
                 provis->CopyFrom(labView);
@@ -1887,23 +1755,69 @@ private:
 
             cmsHTRANSFORM dummy = nullptr;
             int ill = 0;
-            ipf.workingtrc(tmpImage1.get(), tmpImage1.get(), GW, GH, -5, prof, 2.4, 12.92310, ill, 0, dummy, true, false, false);
-            ipf.workingtrc(tmpImage1.get(), tmpImage1.get(), GW, GH, 5, prof, gamtone, slotone, illum, prim, dummy, false, true, true);
+            bool gamutcontrol = params.icm.gamut;
+            int catc = toUnderlying(params.icm.wcat);
+            int locprim = 0;
+            float rdx, rdy, grx, gry, blx, bly = 0.f;
+            float meanx, meany, meanxe, meanye = 0.f;
+            ipf.workingtrc(0, tmpImage1.get(), tmpImage1.get(), GW, GH, -5, prof, 2.4, 12.92310, 0, ill, 0, 0, rdx, rdy, grx, gry, blx, bly, meanx, meany, meanxe, meanye, dummy, true, false, false, false);
+            ipf.workingtrc(0, tmpImage1.get(), tmpImage1.get(), GW, GH, 5, prof, gamtone, slotone, catc, illum, prim, locprim, rdx, rdy, grx, gry, blx, bly, meanx, meany, meanxe, meanye, dummy, false, true, true, gamutcontrol);
+            const int midton = params.icm.wmidtcie;
+            if(midton != 0) {
+                ToneEqualizerParams params;
+                params.enabled = true;
+                params.regularization = 0.f;
+                params.pivot = 0.f;
+                params.bands[0] = 0;
+                params.bands[2] = midton;
+                params.bands[4] = 0;
+                params.bands[5] = 0;
+                int mid = abs(midton);
+                int threshmid = 50;
+                if(mid > threshmid) {
+                    params.bands[1] = sign(midton) * (mid - threshmid);
+                    params.bands[3] = sign(midton) * (mid - threshmid);     
+                }
+                ipf.toneEqualizer(tmpImage1.get(), params, prof, 1, false);
+            }
+
+            const bool smoothi = params.icm.wsmoothcie;
+                if(smoothi) {
+                    ToneEqualizerParams params;
+                    params.enabled = true;
+                    params.regularization = 0.f;
+                    params.pivot = 0.f;
+                    params.bands[0] = 0;
+                    params.bands[1] = 0;
+                    params.bands[2] = 0;
+                    params.bands[3] = 0;
+                    params.bands[4] = -40;//arbitrary value to adapt with WhiteEvjz - here White Ev # 10
+                    params.bands[5] = -80;//8 Ev and above
+                    bool Evsix = true;
+                    if(Evsix) {//EV = 6 majority of images
+                        params.bands[4] = -15;
+                    }
+                
+                    ipf.toneEqualizer(tmpImage1.get(), params, prof, 1, false);
+            }
 
             ipf.rgb2lab(*tmpImage1, *labView, params.icm.workingProfile);
+
             // labView and provis
-            if(provis) {
+            if (provis) {
                 ipf.preserv(labView, provis.get(), GW, GH);
             }
-            if(params.icm.fbw) {
+
+            if (params.icm.fbw) {
 #ifdef _OPENMP
-            #pragma omp parallel for
+                #pragma omp parallel for
 #endif
-            for (int x = 0; x < GH; x++)
-                for (int y = 0; y < GW; y++) {
-                    labView->a[x][y] = 0.f;
-                    labView->b[x][y] = 0.f;
-                }
+
+                for (int x = 0; x < GH; x++)
+                    for (int y = 0; y < GW; y++) {
+                        labView->a[x][y] = 0.f;
+                        labView->b[x][y] = 0.f;
+                    }
             }
 
         }
@@ -1942,7 +1856,7 @@ private:
                 adap = 2000.;
             }//if no exif data or wrong
             else {
-                double E_V = fcomp + log2 ((fnum * fnum) / fspeed / (fiso / 100.f));
+                double E_V = fcomp + log2((fnum * fnum) / fspeed / (fiso / 100.f));
                 double kexp = 0.;
                 E_V += kexp * params.toneCurve.expcomp;// exposure compensation in tonecurve ==> direct EV
                 E_V += 0.5 * log2(params.raw.expos); // exposure raw white point ; log2 ==> linear to EV
@@ -1954,7 +1868,7 @@ private:
             float CAMMean = NAN;
 
             float d, dj, yb;
-            ipf.ciecam_02float (cieView, float (adap), 1, 2, labView, &params, customColCurve1, customColCurve2, customColCurve3, dummy, dummy, CAMBrightCurveJ, CAMBrightCurveQ, CAMMean, 0, 1, true, d, dj, yb, 1);
+            ipf.ciecam_02float(cieView, float (adap), 1, 2, labView, &params, customColCurve1, customColCurve2, customColCurve3, dummy, dummy, CAMBrightCurveJ, CAMBrightCurveQ, CAMMean, 0, 1, true, d, dj, yb, 1);
         }
 
         delete cieView;
@@ -2027,7 +1941,8 @@ private:
             }
         }
 
-        bool bwonly = params.blackwhite.enabled && !params.colorToning.enabled && !autili && !butili && !params.colorappearance.enabled;
+      //  bool bwonly = params.blackwhite.enabled && !params.colorToning.enabled && !autili && !butili && !params.colorappearance.enabled;
+        bool bwonly = params.blackwhite.enabled && !params.colorToning.enabled && !autili && !butili && params.colorappearance.modelmethod != "02";
 
         ///////////// Custom output gamma has been removed, the user now has to create
         ///////////// a new output profile with the ICCProfileCreator
@@ -2070,21 +1985,26 @@ private:
         }
 
         Exiv2Metadata info(imgsrc->getFileName());
+
         switch (params.metadata.mode) {
-        case MetaDataParams::TUNNEL:
-            readyImg->setMetadata(std::move(info));
-            break;
-        case MetaDataParams::EDIT:
-            info.setExif(params.metadata.exif);
-            info.setIptc(params.metadata.iptc);
-            if (!(params.metadata.exifKeys.size() == 1 && params.metadata.exifKeys[0] == "*")) {
-                info.setExifKeys(&(params.metadata.exifKeys));
-            }
-            readyImg->setMetadata(std::move(info));
-            break;
-        default: // case MetaDataParams::STRIP
-            // nothing to do
-            break;
+            case MetaDataParams::TUNNEL:
+                readyImg->setMetadata(std::move(info));
+                break;
+
+            case MetaDataParams::EDIT:
+                info.setExif(params.metadata.exif);
+                info.setIptc(params.metadata.iptc);
+
+                if (!(params.metadata.exifKeys.size() == 1 && params.metadata.exifKeys[0] == "*")) {
+                    info.setExifKeys(&(params.metadata.exifKeys));
+                }
+
+                readyImg->setMetadata(std::move(info));
+                break;
+
+            default: // case MetaDataParams::STRIP
+                // nothing to do
+                break;
         }
 
 

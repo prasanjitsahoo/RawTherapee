@@ -78,7 +78,6 @@ protected:
     ColorTemp autoWB;
     ColorTemp currWBloc;
     ColorTemp autoWBloc;
-    ColorTemp currWBitc;
 
     double lastAwbEqual;
     StandardObserver lastAwbObserver{ColorTemp::DEFAULT_OBSERVER};
@@ -306,6 +305,7 @@ protected:
     LocLLmaskCurve locllmasCurve;
     LocHHmaskCurve lochhmasCurve;
     LocHHmaskCurve lochhhmasCurve;
+    LocHHmaskCurve lochhhmascieCurve;
     LocCCmaskCurve locccmasexpCurve;
     LocLLmaskCurve locllmasexpCurve;
     LocHHmaskCurve lochhmasexpCurve;
@@ -344,6 +344,7 @@ protected:
     LocwavCurve locwavCurve;
     LocwavCurve loclmasCurveblwav;
     LocwavCurve loclmasCurvecolwav;
+    LocwavCurve loclmasCurveciewav;
     LocwavCurve loclevwavCurve;
     LocwavCurve locconwavCurve;
     LocwavCurve loccompwavCurve;

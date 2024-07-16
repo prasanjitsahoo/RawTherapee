@@ -100,7 +100,7 @@ void adjustBlackLevels(float cblack[4], rtengine::eSensorType sensorType, const 
             break;
     }
 
-    for (int i = 0; i < black_adjust.size(); i++) {
+    for (unsigned int i = 0; i < black_adjust.size(); i++) {
         cblack[i] = std::max(0.f, cblack[i] + black_adjust[i]);
     }
 }
@@ -118,7 +118,7 @@ void calculate_scale_mul(float scale_mul[4], const float pre_mul_[4], const floa
 {
     std::array<float, 4> c_white;
 
-    for (int i = 0; i < c_white.size(); ++i) {
+    for (unsigned int i = 0; i < c_white.size(); ++i) {
         c_white[i] = static_cast<float>(ri->get_white(i));
     }
 
@@ -1202,7 +1202,19 @@ IImage8* Thumbnail::processImage (const procparams::ProcParams& params, eSensorT
         double cam_b = colorMatrix[2][0] * camwbRed + colorMatrix[2][1] * camwbGreen + colorMatrix[2][2] * camwbBlue;
         currWB = ColorTemp (cam_r, cam_g, cam_b, params.wb.equal, params.wb.observer);
     } else if (params.wb.method == "autold") {
-        currWB = ColorTemp (autoWBTemp, autoWBGreen, wbEqual, "Custom", wbObserver);
+        if (params.wb.compat_version == 1 && !isRaw) {
+            // RGB grey compatibility version 1 used the identity multipliers
+            // plus temperature bias for non-raw files.
+            currWB.update(1., 1., 1., params.wb.equal, params.wb.observer, params.wb.tempBias);
+        } else {
+            currWB = ColorTemp(autoWBTemp, autoWBGreen, wbEqual, "Custom", wbObserver);
+        }
+    } else if (params.wb.method == "autitcgreen") {
+        if (params.wb.compat_version == 1 && !isRaw) {
+            currWB = ColorTemp(5000., 1., 1., params.wb.method, StandardObserver::TEN_DEGREES);
+        } else {
+            // TODO: Temperature correlation AWB.
+        }
     }
 
     double rm, gm, bm;
@@ -1316,7 +1328,7 @@ IImage8* Thumbnail::processImage (const procparams::ProcParams& params, eSensorT
 
     if (isRaw) {
         double pre_mul[3] = { redMultiplier, greenMultiplier, blueMultiplier };
-        RawImageSource::colorSpaceConversion (baseImg, params.icm, currWB, pre_mul, embProfile, camProfile, cam2xyz, camName );
+        RawImageSource::colorSpaceConversion (baseImg, params.icm, currWB, pre_mul, embProfile, camProfile, cam2xyz, camName, metadata->getFileName());
     } else {
         StdImageSource::colorSpaceConversion (baseImg, params.icm, embProfile, thumbImg->getSampleFormat());
     }
@@ -1331,7 +1343,7 @@ IImage8* Thumbnail::processImage (const procparams::ProcParams& params, eSensorT
     ipf.firstAnalysis (baseImg, params, hist16);
 
     ipf.dehaze(baseImg, params.dehaze);
-    ipf.ToneMapFattal02(baseImg, params.fattal, 3, 0, nullptr, 0, 0, 0);
+    ipf.ToneMapFattal02(baseImg, params.fattal, 3, 0, nullptr, 0, 0, 0, false);
 
     // perform transform
     int origFW;
@@ -1455,7 +1467,7 @@ IImage8* Thumbnail::processImage (const procparams::ProcParams& params, eSensorT
 
     if (isRaw) {
         cmsHPROFILE dummy;
-        RawImageSource::findInputProfile (params.icm.inputProfile, nullptr, camName, &dcpProf, dummy);
+        RawImageSource::findInputProfile (params.icm.inputProfile, nullptr, camName, metadata->getFileName(), &dcpProf, dummy);
 
         if (dcpProf) {
             dcpProf->setStep2ApplyState (params.icm.workingProfile, params.icm.toneCurve, params.icm.applyLookTable, params.icm.applyBaselineExposureOffset, as);
@@ -1516,13 +1528,14 @@ IImage8* Thumbnail::processImage (const procparams::ProcParams& params, eSensorT
 
 
 
-    if ((params.colorappearance.enabled && !params.colorappearance.tonecie) || !params.colorappearance.enabled) {
+   // if ((params.colorappearance.enabled && !params.colorappearance.tonecie) || !params.colorappearance.enabled) {
+    if ((params.colorappearance.enabled && !params.colorappearance.tonecie) || params.colorappearance.modelmethod != "02") {
         ipf.EPDToneMap (labView, 5, 6);
     }
 
     ipf.softLight(labView, params.softlight);
 
-    if (params.icm.workingTRC != ColorManagementParams::WorkingTrc::NONE) {
+    if (params.icm.workingTRC != ColorManagementParams::WorkingTrc::NONE && params.icm.trcExp) {
         const int GW = labView->W;
         const int GH = labView->H;
         std::unique_ptr<LabImage> provis;
@@ -1546,8 +1559,49 @@ IImage8* Thumbnail::processImage (const procparams::ProcParams& params, eSensorT
 
         cmsHTRANSFORM dummy = nullptr;
         int ill = 0;
-        ipf.workingtrc(tmpImage1.get(), tmpImage1.get(), GW, GH, -5, prof, 2.4, 12.92310, ill, 0, dummy, true, false, false);
-        ipf.workingtrc(tmpImage1.get(), tmpImage1.get(), GW, GH, 5, prof, gamtone, slotone, illum, prim, dummy, false, true, true);
+        int locprim = 0;
+        float rdx, rdy, grx, gry, blx, bly = 0.f;
+        float meanx, meany, meanxe, meanye = 0.f;
+        ipf.workingtrc(0, tmpImage1.get(), tmpImage1.get(), GW, GH, -5, prof, 2.4, 12.92310, 0, ill, 0, 0, rdx, rdy, grx, gry, blx, bly, meanx, meany, meanxe, meanye, dummy, true, false, false);
+        ipf.workingtrc(0, tmpImage1.get(), tmpImage1.get(), GW, GH, 5, prof, gamtone, slotone,0, illum, prim, locprim, rdx, rdy, grx, gry, blx, bly,meanx, meany, meanxe, meanye, dummy, false, true, true);
+        const int midton = params.icm.wmidtcie;
+           if(midton != 0) {
+                ToneEqualizerParams params;
+                params.enabled = true;
+                params.regularization = 0.f;
+                params.pivot = 0.f;
+                params.bands[0] = 0;
+                params.bands[2] = midton;
+                params.bands[4] = 0;
+                params.bands[5] = 0;
+                int mid = abs(midton);
+                int threshmid = 50;
+                if(mid > threshmid) {
+                    params.bands[1] = sign(midton) * (mid - threshmid);
+                    params.bands[3] = sign(midton) * (mid - threshmid);     
+                }
+                ipf.toneEqualizer(tmpImage1.get(), params, prof, 1, false);
+                }
+
+        const bool smoothi = params.icm.wsmoothcie;
+            if(smoothi) {
+                ToneEqualizerParams params;
+                params.enabled = true;
+                params.regularization = 0.f;
+                params.pivot = 0.f;
+                params.bands[0] = 0;
+                params.bands[1] = 0;
+                params.bands[2] = 0;
+                params.bands[3] = 0;
+                params.bands[4] = -40;//arbitrary value to adapt with WhiteEvjz - here White Ev # 10
+                params.bands[5] = -80;//8 Ev and above
+                bool Evsix = true;
+                if(Evsix) {//EV = 6 majority of images
+                    params.bands[4] = -15;
+                }
+                
+                ipf.toneEqualizer(tmpImage1.get(), params, prof, 1, false);
+            }
 
         ipf.rgb2lab(*tmpImage1, *labView, params.icm.workingProfile);
         // labView and provis
