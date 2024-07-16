@@ -13,7 +13,7 @@ ENV LC_ALL C.UTF-8
 
 #   clone source code, checkout metadata-exiv2 branch
 
-RUN mkdir -p ~/programs && git clone http://github.com/Beep6581/RawTherapee.git ~/programs/code-rawtherapee && cd ~/programs/code-rawtherapee && git checkout metadata-exiv2
+RUN mkdir -p ~/programs && git clone http://github.com/Beep6581/RawTherapee.git ~/programs/code-rawtherapee && cd ~/programs/code-rawtherapee
 
 #   update lensfun
 RUN cd ~/programs && lensfun-update-data
